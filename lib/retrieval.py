@@ -5,15 +5,17 @@ DEFAULT_TOP_K = 3
 
 def get_chroma_collection(path=CHROMA_PATH, collection_name=COLLECTION_NAME):
     """Return a persistent Chroma collection for manual local testing."""
-    # TODO: Import chromadb inside this function.
-    # TODO: Create a PersistentClient using path.
-    # TODO: Return get_or_create_collection(collection_name).
-    raise NotImplementedError("Implement get_chroma_collection().")
+    # Import chromadb inside this function.
+    import chromadb
+
+    # Create a PersistentClient using path.
+    client = chromadb.PersistentClient(path=path)
+    # Return get_or_create_collection(collection_name).
+    return client.get_or_create_collection(collection_name)
 
 
 def format_chroma_results(results):
     """Normalize Chroma query results into context chunk dictionaries.
-
     Chroma query results often look like:
         {
             "ids": [["chunk-1"]],
@@ -22,20 +24,57 @@ def format_chroma_results(results):
             "distances": [[0.12]]
         }
     """
-    # TODO: Handle nested Chroma result lists.
-    # TODO: Skip missing or blank documents.
-    # TODO: Return dictionaries with id, text, source_id, title, category,
-    #       section, and distance keys.
-    raise NotImplementedError("Implement format_chroma_results().")
+    # Handle nested Chroma result lists.
+    ids = results.get("ids", [[]])[0]
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    # Skip missing or blank documents.
+    chunks = []  # Collects one dictionary per usable chunk
+
+    for index, chunk_id in enumerate(ids):  # index = position, chunk_id = the ID at that position
+        text = documents[index]             # Matching text for this chunk
+
+        if not text or not text.strip():    # Missing, empty, or whitespace-only
+            continue                        # Skip this chunk and move to the next one
+
+    # Return dictionaries with id, text, source_id, title, category, section, and distance keys.
+        metadata = metadatas[index] or {}  # This chunk's metadata; {} if Chroma gave None
+
+        chunks.append({                                  # Add one normalized chunk to the list
+            "id": chunk_id,                              # Chunk's unique ID
+            "text": text.strip(),                        # Cleaned chunk text
+            "source_id": metadata.get("source_id"),      # Policy document ID, ex: "SUB-101"
+            "title": metadata.get("title"),              # Document title
+            "category": metadata.get("category"),        # ex: "Billing"
+            "section": metadata.get("section"),          # Section within the document
+            "distance": distances[index],                # Similarity score (lower = closer match)
+        })
+    
+    return chunks  # All usable chunks, in Chroma's order
 
 
 def retrieve_context(question, collection=None, top_k=DEFAULT_TOP_K):
     """Retrieve context chunks for a user question.
-
     Tests may pass a fake collection. Manual use should call Chroma.
     """
-    # TODO: Strip the question.
-    # TODO: Use the provided collection or get_chroma_collection().
-    # TODO: Call collection.query() with query_texts, n_results, and include.
-    # TODO: Return normalized context chunks.
-    raise NotImplementedError("Implement retrieve_context().")
+    # Strip the question.
+    question = question.strip()  # Remove extra spaces from both ends
+
+    # Use the provided collection or get_chroma_collection().
+    if not question:        # Blank question: nothing to search for
+        return []           # Return no chunks, without querying Chroma
+
+    if collection is None:  # No collection passed in (normal app use)
+        collection = get_chroma_collection()  # Connect to the real Chroma database
+
+    # Call collection.query() with query_texts, n_results, and include.
+    results = collection.query(                                 # Ask Chroma for similar chunks
+        query_texts=[question],                                 # The question, wrapped in a list
+        n_results=top_k,                                        # How many chunks to return
+        include=["documents", "metadatas", "distances"],        # What data to send back
+    )
+
+    # Return normalized context chunks.
+    return format_chroma_results(results)  # Unwrap and regroup into chunk dictionaries
