@@ -25,23 +25,24 @@ def format_chroma_results(results):
         }
     """
     # Handle nested Chroma result lists.
-    ids = results.get("ids", [[]])[0]
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-    distances = results.get("distances", [[]])[0]
+    ids = (results.get("ids") or [[]])[0]
+    documents = (results.get("documents") or [[]])[0]
+    metadatas = (results.get("metadatas") or [[]])[0]
+    distances = (results.get("distances") or [[]])[0]
 
     # Skip missing or blank documents.
     chunks = []  # Collects one dictionary per usable chunk
 
     for index, chunk_id in enumerate(ids):  # index = position, chunk_id = the ID at that position
-        text = documents[index]             # Matching text for this chunk
+        text = documents[index] if index < len(documents) else None  # None if no matching document
 
         if not text or not text.strip():    # Missing, empty, or whitespace-only
             continue                        # Skip this chunk and move to the next one
 
     # Return dictionaries with id, text, source_id, title, category, section, and distance keys.
-        metadata = metadatas[index] or {}  # This chunk's metadata; {} if Chroma gave None
-
+        metadata = (metadatas[index] if index < len(metadatas) else None) or {}  # {} if missing or None
+        distance = distances[index] if index < len(distances) else None  # None if no distance given
+        
         chunks.append({                                  # Add one normalized chunk to the list
             "id": chunk_id,                              # Chunk's unique ID
             "text": text.strip(),                        # Cleaned chunk text
@@ -49,7 +50,7 @@ def format_chroma_results(results):
             "title": metadata.get("title"),              # Document title
             "category": metadata.get("category"),        # ex: "Billing"
             "section": metadata.get("section"),          # Section within the document
-            "distance": distances[index],                # Similarity score (lower = closer match)
+            "distance": distance,                        # Similarity score (lower = closer match)
         })
     
     return chunks  # All usable chunks, in Chroma's order

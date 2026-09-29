@@ -44,7 +44,7 @@ def validate_question_payload(payload):
     if len(question) < MIN_QUESTION_LENGTH:
         return None, {
             "error": "short_question",
-            "message": "Question must be at least 3 characters long.",
+            "message": f"Question must be at least {MIN_QUESTION_LENGTH} characters long.",
         }
 
     # If passing all of the above:
