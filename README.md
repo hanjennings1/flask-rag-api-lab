@@ -1,304 +1,132 @@
 # Lab: Build a Flask RAG API Endpoint
+**Completed Sept 29, 2026**
 
 ## Overview
+A Flask API that answers customer success questions using **Retrieval-Augmented Generation (RAG)**. It retrieves relevant policy text from a Chroma vector database, asks a local Ollama model to answer using only that text, and returns the answer along with the sources it came from.
+ 
+![Screenshot of the completed Flask RAG API lab](flask-rag-api-lab.png)
+ 
+## How It Works
+ 
+Every request to `POST /api/ask` runs through the same pipeline:
+ 
+```
+question → validate → retrieve context → (fallback if none) → build prompt → call model → format answer and sources
+```
+ 
+Each stage lives in its own module, so it can be tested and changed on its own:
+ 
+| Module | Responsibility |
+|---|---|
+| `app.py` | Flask route: reads the request, validates it, and maps results to HTTP status codes |
+| `lib/validation.py` | Rejects missing, non-string, blank, or too-short questions before any other work runs |
+| `lib/retrieval.py` | Queries Chroma and normalizes its nested results into flat context chunks |
+| `lib/prompt_builder.py` | Builds a structured prompt that restricts the model to the approved context |
+| `lib/model_client.py` | Sends the prompt to Ollama and converts every failure into a `ModelClientError` |
+| `lib/response_formatter.py` | Builds success, fallback, and error response bodies |
+| `lib/rag_service.py` | Runs the pipeline in order, with injectable dependencies for testing |
+ 
+## API
+ 
+### `POST /api/ask`
+ 
+**Request**
+ 
+```json
+{ "question": "Can I upgrade a customer today?" }
+```
+ 
+**Success (200)**: an answer grounded in the retrieved policy documents, plus source metadata for review.
+ 
+```json
+{
+  "answer": "Yes, customers can upgrade at any time...",
+  "sources": [
+    {
+      "id": "SUB-101",
+      "title": "Subscription Plan Changes",
+      "category": "Billing",
+      "section": "Upgrades",
+      "chunk_id": "chunk-sub-101-a"
+    }
+  ]
+}
+```
+ 
+**Fallback (200)**: when no approved context is found, the model is never called, and the API returns a safe message with no sources.
+ 
+```json
+{
+  "answer": "The approved customer success documents do not contain enough information to answer that question...",
+  "sources": []
+}
+```
+ 
+**Invalid input (400)**: one of `invalid_request`, `missing_question`, `invalid_question`, `empty_question`, or `short_question`.
+ 
+```json
+{ "error": "empty_question", "message": "Question cannot be blank." }
+```
+ 
+**Model service failure (502)**: Ollama is unreachable or returned an unusable response.
+ 
+```json
+{ "error": "model_service_error", "message": "Model request failed: ..." }
+```
+ 
+## Design Decisions
+ 
+- **Grounding:** The prompt tells the model to use only the approved context, not to invent rules, dates, prices, or exceptions, and to say when information is missing.
+- **Fallback before generation:** If retrieval returns nothing, the service returns the fallback response without calling the model, so it has no chance to make up a policy.
+- **Source attribution without data exposure:** Sources include document and chunk IDs for review, but not full chunk text or distance scores.
+- **One error type for the model:** Network failures, bad JSON, and blank answers all become `ModelClientError`, so the route handles every model problem with a single `except` and a 502.
+- **Dependency injection:** `answer_question()` and `retrieve_context()` accept optional fakes, so the full workflow is tested without a real database or model.
 
-You will be **implementing a Flask RAG API endpoint** within a **customer success knowledge-base scenario** in connection to **Identify → Assemble → Execute → Verify** with **request validation, Chroma retrieval, prompt and context engineering, model-client integration, source attribution, fallback behavior, and structured JSON response design** to a standard where your code passes the provided pytest test suite and returns a grounded answer with supporting sources.
-
-In this lab, you will connect the retrieval foundation from the previous module to a backend AI workflow. A RAG API helps an application retrieve relevant source material, place that context into a structured prompt, call a model, and return a response that users and developers can inspect.
-
-The goal is not just to make an AI model respond. The goal is to build a backend workflow that controls what the model receives, avoids unsupported answers, and returns predictable data that a frontend could display.
-
-## You'll get
-
-**Support:**
-
-- Starter Flask app structure
-- Starter files in `lib/`
-- A provided customer success knowledge base
-- A Chroma seeding script for manual local testing
-- A deterministic pytest suite
-- Mocked retrieval and model behavior in tests
-- Optional Ollama support for local experimentation
-
-**Rules:**
-
-- You may use the starter code, course lessons, Python documentation, and your notes.
-- You may run pytest as many times as needed.
-- You should not modify the test files for grading.
-- You should not hard-code answers for specific test questions.
-- You should not hard-code the test fixtures into your implementation.
-- You should not use LangChain for this lab.
-- You should implement Chroma retrieval in your code, but tests will mock retrieval where needed.
-- You do not need internet access or Ollama to pass the tests.
-- Ollama is optional for local manual testing after your tests pass.
-- Your grade is based on pytest results only.
-
-## You will be able to
-
-- **Validate** incoming JSON requests before the RAG workflow starts.
-- **Retrieve** relevant context from a Chroma-style collection.
-- **Normalize** Chroma query results into context chunks.
-- **Build** a structured RAG prompt from instructions, context, a user question, and response requirements.
-- **Call** a model client for local manual testing.
-- **Return** structured JSON with an answer and source metadata.
-- **Use** fallback behavior when approved context is missing.
-- **Verify** the backend workflow using pytest.
-
-## You'll show it by
-
-Creating and submitting a completed Flask RAG API project that implements:
-
-- `POST /api/ask`
-- `validate_question_payload()`
-- `format_chroma_results()`
-- `retrieve_context()`
-- `format_context_chunk()`
-- `build_rag_prompt()`
-- `generate_answer()`
-- `format_sources()`
-- `format_success_response()`
-- `format_fallback_response()`
-- `answer_question()`
-
-Your submission will be tested with `pytest`.
-
-## How you'll work
-
-This lab uses the technical process **Identify → Assemble → Execute → Verify**.
-
-That process fits a RAG API because you need to identify the endpoint contract, assemble the route and helper functions, execute the request through retrieval and generation, and verify the answer, sources, JSON shape, and fallback behavior.
-
-## To meet the standard, your work must
-
-- Pass the provided pytest suite.
-- Accept valid `POST /api/ask` requests.
-- Reject missing, blank, invalid, or too-short questions before retrieval.
-- Query Chroma using the user question and `top_k`.
-- Normalize retrieved context into dictionaries with text and source metadata.
-- Build a prompt with clear sections:
-  - `Instructions:`
-  - `Context:`
-  - `Question:`
-  - `Response Requirements:`
-- Instruct the model to use only approved context.
-- Return a JSON object with:
-  - `answer`
-  - `sources`
-- Include source metadata in successful grounded responses.
-- Return a safe fallback response when context is missing.
-- Return a clear service error response when the model client fails.
-- Keep route, validation, retrieval, prompt, model, response, and orchestration logic separated.
-
----
-
-## Scenario
-
-You are a junior backend developer on an internal tools team. The Customer Success department supports subscription customers who ask about plan changes, invoices, service credits, workspace exports, account access, and onboarding limits.
-
-Support representatives often ask natural-language questions such as:
-
-> Can I upgrade a customer today and explain what happens to billing?
-
-The approved information exists in customer success policy documents, but representatives do not always know which document to search. Your task is to build a small RAG API that retrieves relevant customer success context from Chroma, asks a local model to answer using that context, and returns an answer with sources.
-
-A strong answer should be:
-
-- grounded in retrieved context,
-- clear enough for a support representative to use,
-- careful about missing information,
-- and source-backed so the response can be reviewed.
-
----
-
-## Tools and resources
-
-- Python 3.10
-- Visual Studio Code or another code editor
-- Terminal or integrated terminal
-- `pipenv`
-- Flask
-- ChromaDB
-- pytest
-- Optional: Ollama installed and running locally
-- Optional: a generation model such as `llama3.2`
-
----
-
-## Instructions
-
-### Setup
-
-Install dependencies:
-
-```bash
+## Setup
+ 
+Requires Python 3.10 and `pipenv`.
+ 
+```
 pipenv install
 pipenv shell
 ```
-
-Run the tests:
-
-```bash
-pytest
+ 
+## Running The Tests
+ 
 ```
-
-The tests will fail at first. That is expected. Your job is to implement the starter functions until the test suite passes.
-
-### Step 1: Identify the RAG API goal and output contract
-
-Your endpoint should receive:
-
-```json
-{
-  "question": "Can I upgrade a customer today?"
-}
-
-Your endpoint route must be:
-
-```http
-POST /api/ask
-```
-
-A successful response must include:
-
-* answer
-* sources
-
-A fallback response must include a safe answer and an empty source list.
-
-### Step 2: Implement request validation
-
-Open `lib/validation.py`. Implement: `validate_question_payload(payload)`
-
-This function should:
-
-* Require a JSON object.
-* Require a question field.
-* Require the question to be a string.
-* Trim extra whitespace.
-* Reject blank questions.
-* Reject questions shorter than 3 characters.
-* Return the cleaned question and no error when valid.
-* Return no question and an error dictionary when invalid.
-
-### Step 3: Implement Chroma retrieval helpers
-
-Open `lib/retrieval.py`.
-
-Implement:
-* `get_chroma_collection()`
-* `format_chroma_results()`
-* `retrieve_context()`
-
-Your retrieval code should:
-
-* Connect to a local persistent Chroma collection.
-* Query with the user question.
-* Use the provided `top_k`.
-* Request documents, metadata, and distances.
-* Normalize Chroma's nested query result shape.
-* Return context chunks with text and source metadata.
-
-### Step 4: Implement prompt construction
-
-Open `lib/prompt_builder.py`.
-
-Implement:
-
-* `format_context_chunk()`
-* `build_rag_prompt()`
-
-Your prompt should include:
-
-```text
-Instructions:
-Context:
-Question:
-Response Requirements:
-```
-
-Your prompt should tell the model to:
-
-* Use only the approved context.
-* Avoid inventing unsupported details.
-* Identify missing information when context is incomplete.
-* Answer concisely.
-* Use source IDs when helpful.
-
-### Step 5: Implement the model client
-
-Open `lib/model_client.py`.
-
-Implement `generate_answer()`
-
-The model client should:
-
-* Send a prompt to Ollama's `/api/generate` endpoint.
-* Use `stream: false`.
-* Return the generated response text.
-* Raise `ModelClientError` if the model request fails.
-* Raise `ModelClientError` if the response is missing or unusable.
-
-The tests mock this behavior, so you do not need Ollama to pass pytest.
-
-### Step 6: Implement response formatting
-
-Open `lib/response_formatter.py`.
-
-Implement:
-* `format_sources()`
-* `format_success_response()`
-* `format_fallback_response()`
-* `format_error_response()`
-
-Your response formatting should:
-
-* Return source metadata without including full chunk text.
-* Avoid duplicate source entries.
-* Return an answer and sources list for success.
-* Return a safe fallback answer with sources: `[]`.
-* Return clear error dictionaries for validation or model-service failures.
-
-#### Step 7: Implement the RAG service
-
-Open `lib/rag_service.py`. Implement the `answer_question()` function.
-
-This function should coordinate the workflow:
-
-```text
-question
-→ retrieve context
-→ return fallback if no context
-→ build prompt
-→ call model
-→ format answer and sources
-```
-
-Do not call the model when no useful context is retrieved.
-
-#### Step 8: Implement the Flask route
-
-Open `app.py`. Implement:
-
-```http
-POST /api/ask
-```
-
-The route should:
-
-* Read the JSON request body.
-* Validate the question.
-* Return 400 for invalid input.
-* Call the RAG service for valid input.
-* Return 200 for successful or fallback RAG responses.
-* Return 502 for model-service errors.
-
-#### Step 9: Verify your work
-
-Run:
-
-```bash
 pytest -q
 ```
-
-Keep working until all tests pass.
-
+ 
+The tests mock Chroma and the model, so they don't need Ollama or internet access.
+ 
+## Tryin It Locally (optional)
+ 
+This requires [Ollama](https://ollama.com) installed and running.
+ 
+1. Download the model:
+```
+   ollama pull llama3.2
+```
+ 
+2. Load the knowledge base into Chroma. This creates a local `chroma_db/` folder, which is git-ignored.
+```
+   python seed_chroma.py
+```
+ 
+3. Start the API:
+```
+   flask run
+```
+ 
+4. In a second terminal, ask a question:
+```
+   curl -X POST http://127.0.0.1:5000/api/ask \
+     -H "Content-Type: application/json" \
+     -d '{"question": "Can I upgrade a customer today?"}'
+```
+ 
+Chroma may print `Failed to send telemetry event` warnings. They come from Chroma's anonymous usage reporting and can be safely ignored.
+ 
+## Technology Used
+Python 3.10 · Flask · ChromaDB · Ollama (llama3.2) · requests · pytest
+ 
